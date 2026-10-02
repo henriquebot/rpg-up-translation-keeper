@@ -1,48 +1,47 @@
 # RPG Up Translation Keeper
 
-Módulo para Foundry VTT v14 que reduz o risco de perder traduções ao reimportar Adventures.
+Proteção de traduções para atualizações de **Adventures** no Foundry VTT v14.
 
-## O que a v0.1.0 faz
+## O que a v0.2.0 faz
 
-Ao clicar em **Import Adventure**, o módulo interrompe a importação antes que o Foundry sobrescreva documentos do mundo.
+Quando o GM tenta usar **Import Adventure**, o módulo interrompe a operação antes da sobrescrita e executa um fluxo seguro:
 
-Ele mostra quantos documentos serão criados e atualizados e, se o GM continuar, gera um arquivo JSON com:
+1. identifica os documentos que serão criados e atualizados;
+2. exige uma **baseline antiga** da Adventure para o primeiro merge protegido;
+3. gera um backup JSON dos documentos atuais e dos dados novos;
+4. compara **original antigo → mundo local traduzido → original novo**;
+5. preserva automaticamente campos locais cujo original não mudou;
+6. em HTML, preserva também nós de texto individuais quando apenas parte do conteúdo mudou;
+7. deixa em inglês apenas campos/trechos que realmente mudaram no original;
+8. depois de uma importação bem-sucedida, salva a nova baseline para a próxima atualização.
 
-- cópia completa dos documentos atuais que seriam sobrescritos;
-- dados novos que a Adventure pretende criar/atualizar;
-- fonte da Adventure que está entrando;
-- metadados de Foundry, mundo e sistema;
-- cache e preferências seguras do **Translate All**, quando o módulo estiver instalado.
+## Primeira atualização protegida
 
-O backup **não inclui API keys** do Translate All.
+Na primeira vez, o módulo pede um backup anterior contendo a Adventure antiga. Ele aceita:
 
-Depois do download, uma segunda confirmação é exigida. Só então o Translation Keeper relança a importação e libera aquela tentativa específica.
+- `EMBER-TRADUCAO-BACKUP-....json` criado pelo fluxo anterior do projeto;
+- backups anteriores do próprio Translation Keeper;
+- uma baseline exportada pelo Translation Keeper.
 
-## Escopo atual
+Depois disso, a baseline passa a ser armazenada no mundo automaticamente.
 
-A v0.1.0 é uma camada anti-acidente e de backup. Ela ainda **não faz merge automático de traduções**.
+## Segurança
 
-O objetivo das próximas versões é comparar:
+- O hook `preImportAdventure` bloqueia a importação original antes de qualquer sobrescrita.
+- A importação só é relançada depois do backup e de uma confirmação explícita do GM.
+- O merge é aplicado aos dados de `toUpdate` **antes** do Foundry gravá-los no mundo.
+- Campos que mudaram no original não recebem tradução antiga cegamente.
+- O backup inclui o cache seguro do Translate All quando disponível, mas **não inclui API keys**.
 
-1. Adventure original anterior;
-2. documentos traduzidos do mundo;
-3. Adventure atualizada;
+## Limite intencional
 
-para restaurar automaticamente apenas traduções cujo conteúdo original não mudou e separar o conteúdo alterado para retradução.
-
-## Configuração
-
-Em **Configurações do módulo**, o GM pode ativar ou desativar `Proteger importação de Adventures`.
-
-A proteção vale para qualquer Adventure importada no mundo, não apenas Ember.
+Se o texto original mudou de verdade, o módulo não inventa uma tradução nova. Ele preserva o que ainda é seguro e informa quantos campos precisam ser retraduzidos.
 
 ## Compatibilidade
 
 - Foundry VTT 14+
 - Verificado inicialmente em Foundry 14.368
 
-## Desenvolvimento
+Manifest:
 
-ID do módulo: `rpg-up-translation-keeper`
-
-Repositório: https://github.com/henriquebot/rpg-up-translation-keeper
+`https://raw.githubusercontent.com/henriquebot/rpg-up-translation-keeper/main/module.json`
