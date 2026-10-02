@@ -1,8 +1,8 @@
 {
   "id": "rpg-up-translation-keeper",
   "title": "RPG Up Translation Keeper",
-  "description": "Protege traduções antes da importação de Adventures no Foundry VTT, criando um backup dos documentos que seriam sobrescritos e exigindo confirmação explícita antes de continuar.",
-  "version": "0.1.0",
+  "description": "Protege traduções ao atualizar Adventures no Foundry VTT usando backup automático e merge de três vias entre o original antigo, o mundo traduzido e o original novo.",
+  "version": "0.2.0",
   "type": "module",
   "authors": [
     {
