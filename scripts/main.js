@@ -485,6 +485,12 @@ function runTranslationMerge(toUpdate = {}, baseline, mutate) {
         const newValue = newNode.value;
 
         if (localValue === oldValue) continue;
+
+        if (!isTranslatablePath(documentName, path)) {
+          stats.ignoredTechnicalDifferences += 1;
+          continue;
+        }
+
         stats.localDifferences += 1;
 
         if (newValue === oldValue) {
@@ -507,6 +513,90 @@ function runTranslationMerge(toUpdate = {}, baseline, mutate) {
   }
 
   return stats;
+}
+
+function isTranslatablePath(documentName, path) {
+  let tokens;
+  try {
+    tokens = JSON.parse(path);
+  } catch {
+    return false;
+  }
+
+  const keys = tokens
+    .filter(token => typeof token === "string")
+    .map(key => key.toLowerCase());
+
+  if (!keys.length) return false;
+
+  const blockedContainers = new Set([
+    "_stats",
+    "flags",
+    "ownership",
+    "permission",
+    "permissions",
+    "texture",
+    "prototypeToken",
+    "prototype-token"
+  ]);
+
+  if (keys.some(key => blockedContainers.has(key))) return false;
+
+  const last = keys.at(-1);
+  const parent = keys.at(-2) ?? "";
+
+  const directTextFields = new Set([
+    "name",
+    "description",
+    "content",
+    "caption",
+    "label",
+    "flavor",
+    "chatflavor",
+    "summary",
+    "biography",
+    "appearance",
+    "notes",
+    "public",
+    "private",
+    "race",
+    "alignment",
+    "background",
+    "faith",
+    "gender",
+    "eyes",
+    "hair",
+    "skin",
+    "bond",
+    "ideal",
+    "flaw",
+    "trait",
+    "personality",
+    "text"
+  ]);
+
+  if (directTextFields.has(last)) return true;
+
+  if (last === "value") {
+    const semanticValueParents = new Set([
+      "description",
+      "biography",
+      "appearance",
+      "notes",
+      "public",
+      "private",
+      "text",
+      "flavor",
+      "chatflavor",
+      "summary"
+    ]);
+    if (semanticValueParents.has(parent)) return true;
+  }
+
+  // Macros contain executable source in "command"; never treat it as translation text.
+  if (documentName === "Macro") return last === "name";
+
+  return false;
 }
 
 function mergeHtmlTextNodes(baseHtml, localHtml, incomingHtml) {
@@ -583,6 +673,7 @@ function emptyMergeStats() {
     documentsCompared: 0,
     documentsWithoutBaseline: 0,
     localDifferences: 0,
+    ignoredTechnicalDifferences: 0,
     safePreservedFields: 0,
     sourceChangedFields: 0,
     htmlFieldsMerged: 0,
@@ -749,7 +840,8 @@ function buildAnalysisHtml(adventure, analysis, preview, hasBaseline) {
           <strong>Prévia da proteção:</strong>
           <span>${preview.safePreservedFields} campos traduzidos podem ser preservados com segurança.</span>
           <span>${preview.htmlTextNodesPreserved} trechos HTML inalterados podem ser mantidos.</span>
-          <span>${preview.needsRetranslation} campo(s) mudaram no original e precisarão de nova tradução.</span>
+          <span>${preview.needsRetranslation} campo(s) de texto mudaram no original e precisarão de nova tradução.</span>
+          <span>${preview.ignoredTechnicalDifferences} diferenças técnicas/migração foram ignoradas.</span>
         </div>
       ` : ""}
       <p>Antes de importar, o Translation Keeper baixa uma cópia dos documentos atuais e dos dados novos.</p>
@@ -767,7 +859,8 @@ function buildBackupConfirmationHtml(filename, preview, hasBaseline) {
         <div class="rtk-summary">
           <span>✓ ${preview.safePreservedFields} campo(s) locais preserváveis.</span>
           <span>✓ ${preview.htmlTextNodesPreserved} trecho(s) HTML preserváveis.</span>
-          <span>⚠ ${preview.needsRetranslation} campo(s) com mudança real no original.</span>
+          <span>⚠ ${preview.needsRetranslation} campo(s) de texto com mudança real no original.</span>
+          <span>↪ ${preview.ignoredTechnicalDifferences} diferença(s) técnicas ignoradas.</span>
         </div>
         <p>Ao continuar, o merge é aplicado <strong>antes</strong> do Foundry sobrescrever os documentos.</p>
       ` : ""}
@@ -777,7 +870,7 @@ function buildBackupConfirmationHtml(filename, preview, hasBaseline) {
 
 function showImportResult(result) {
   const message = result.localDifferences > 0
-    ? `${MODULE_TITLE}: importação concluída. ${result.safePreservedFields} campo(s) e ${result.htmlTextNodesPreserved} trecho(s) HTML foram preservados; ${result.needsRetranslation} campo(s) mudaram no original.`
+    ? `${MODULE_TITLE}: importação concluída. ${result.safePreservedFields} campo(s) e ${result.htmlTextNodesPreserved} trecho(s) HTML foram preservados; ${result.needsRetranslation} campo(s) de texto mudaram no original; ${result.ignoredTechnicalDifferences} diferenças técnicas foram ignoradas.`
     : `${MODULE_TITLE}: importação concluída; nenhuma tradução local precisou ser restaurada.`;
 
   ui.notifications.info(message, { permanent: result.needsRetranslation > 0 });
