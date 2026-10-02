@@ -1,18 +1,11 @@
 .rtk-dialog,
 .rtk-confirm {
-  min-width: 520px;
+  min-width: 540px;
 }
 
 .rtk-dialog p,
 .rtk-confirm p {
   line-height: 1.45;
-}
-
-.rtk-risk {
-  padding: 0.65rem 0.8rem;
-  border: 1px solid var(--color-border-light-2);
-  border-radius: 6px;
-  background: rgb(0 0 0 / 8%);
 }
 
 .rtk-table {
@@ -36,6 +29,31 @@
   text-align: center;
 }
 
+.rtk-summary {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0.75rem 0;
+  padding: 0.65rem 0.8rem;
+  border: 1px solid var(--color-border-light-2);
+  border-radius: 6px;
+  background: rgb(0 0 0 / 8%);
+}
+
+.rtk-good,
+.rtk-warn {
+  font-weight: 700;
+}
+
+.rtk-help {
+  opacity: 0.8;
+  font-size: 0.9em;
+}
+
 .rtk-filename {
   overflow-wrap: anywhere;
+}
+
+.rtk-dialog input[type="file"] {
+  width: 100%;
+  margin: 0.5rem 0;
 }
