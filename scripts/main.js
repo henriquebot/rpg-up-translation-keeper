@@ -536,7 +536,7 @@ function isTranslatablePath(documentName, path) {
     "permission",
     "permissions",
     "texture",
-    "prototypeToken",
+    "prototypetoken",
     "prototype-token"
   ]);
 
