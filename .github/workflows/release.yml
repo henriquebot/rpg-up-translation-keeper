@@ -1,0 +1,35 @@
+name: Build Foundry Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build module zip
+        run: |
+          zip -r rpg-up-translation-keeper.zip \
+            module.json \
+            scripts \
+            styles \
+            README.md \
+            CHANGELOG.md \
+            LICENSE
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            rpg-up-translation-keeper.zip \
+            --title "RPG Up Translation Keeper ${GITHUB_REF_NAME}" \
+            --generate-notes
