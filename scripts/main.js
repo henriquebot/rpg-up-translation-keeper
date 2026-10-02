@@ -494,14 +494,13 @@ function runTranslationMerge(toUpdate = {}, baseline, mutate) {
         }
 
         stats.sourceChangedFields += 1;
+        stats.needsRetranslation += 1;
 
         const htmlMerge = mergeHtmlTextNodes(oldValue, localValue, newValue);
         if (htmlMerge.changed) {
           stats.htmlFieldsMerged += 1;
           stats.htmlTextNodesPreserved += htmlMerge.preservedNodes;
           if (mutate) newNode.set(htmlMerge.value);
-        } else {
-          stats.needsRetranslation += 1;
         }
       }
     }
