@@ -13,7 +13,6 @@ Hooks.once("init", () => {
     config: true,
     type: Boolean,
     default: true,
-    restricted: true
   });
 
   game.settings.register(MODULE_ID, "lastBackup", {
@@ -21,7 +20,6 @@ Hooks.once("init", () => {
     config: false,
     type: Object,
     default: {},
-    restricted: true
   });
 });
 
