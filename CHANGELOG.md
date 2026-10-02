@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.1
+
+- Restringe o merge automático a campos realmente traduzíveis.
+- Ignora diferenças técnicas de D&D5e/Foundry, como migração, flags e metadados.
+- A prévia agora mostra separadamente quantas diferenças técnicas foram ignoradas.
+- Mantém a proteção de três vias para nomes, descrições, journals, textos de tabelas e outros campos de leitura.
+
 ## 0.2.0
 
 - Adiciona merge de três vias para preservar traduções durante Adventure Import.
