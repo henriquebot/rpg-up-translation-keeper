@@ -21,6 +21,6 @@
   ],
   "url": "https://github.com/henriquebot/rpg-up-translation-keeper",
   "manifest": "https://raw.githubusercontent.com/henriquebot/rpg-up-translation-keeper/main/module.json",
-  "download": "https://github.com/henriquebot/rpg-up-translation-keeper/releases/latest/download/rpg-up-translation-keeper.zip",
+  "download": "https://raw.githubusercontent.com/henriquebot/rpg-up-translation-keeper/main/dist/rpg-up-translation-keeper.zip",
   "readme": "https://github.com/henriquebot/rpg-up-translation-keeper/blob/main/README.md"
 }
