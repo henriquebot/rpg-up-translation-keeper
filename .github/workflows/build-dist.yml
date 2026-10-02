@@ -20,6 +20,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Validate JavaScript
+        run: node --check scripts/main.js
       - name: Build ZIP
         run: |
           rm -f dist/rpg-up-translation-keeper.zip
