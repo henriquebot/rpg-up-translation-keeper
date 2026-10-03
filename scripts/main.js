@@ -53,6 +53,13 @@ Hooks.once("init", () => {
   });
 });
 
+Hooks.on("importAdventure", (adventure, options, created, updated) => {
+  if (!bypassContext || !sameAdventure(adventure, bypassContext.adventure)) return;
+  bypassContext.coreImportCompleted = true;
+  bypassContext.created = created;
+  bypassContext.updated = updated;
+});
+
 Hooks.once("ready", () => {
   const module = game.modules.get(MODULE_ID);
   if (module) {
@@ -193,17 +200,28 @@ async function runProtectionFlow(adventure, options, toCreate, toUpdate) {
     return;
   }
 
-  bypassContext = { adventure, baseline, mergeResult: null };
-  let importSucceeded = false;
+  bypassContext = {
+    adventure,
+    baseline,
+    mergeResult: null,
+    coreImportCompleted: false,
+    created: null,
+    updated: null
+  };
+
+  let importError = null;
 
   try {
     await adventure.import(options ?? {});
-    importSucceeded = true;
+  } catch (error) {
+    importError = error;
   } finally {
-    const mergeResult = bypassContext?.mergeResult ?? emptyMergeStats();
+    const context = bypassContext;
+    const mergeResult = context?.mergeResult ?? emptyMergeStats();
+    const coreImportCompleted = Boolean(context?.coreImportCompleted);
     bypassContext = null;
 
-    if (importSucceeded) {
+    if (coreImportCompleted) {
       const newBaseline = buildBaselineFromAdventureSource(adventure.toObject(), {
         source: "post-import",
         adventureId: adventure.id ?? null,
@@ -220,6 +238,16 @@ async function runProtectionFlow(adventure, options, toCreate, toUpdate) {
       }
 
       showImportResult(mergeResult);
+
+      if (importError) {
+        console.error(`${MODULE_TITLE} | A Adventure foi importada, mas uma rotina pós-importação falhou`, importError);
+        ui.notifications.warn(
+          `${MODULE_TITLE}: o conteúdo da Adventure foi importado e as traduções foram protegidas, mas uma rotina pós-importação do módulo da Adventure falhou. Não importe novamente.`,
+          { permanent: true }
+        );
+      }
+    } else if (importError) {
+      throw importError;
     }
   }
 }
