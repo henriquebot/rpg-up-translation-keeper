@@ -435,10 +435,14 @@ function collectStringLeaves(root) {
   return result;
 }
 
-function indexStringLeaves(root) {
+function indexStringLeaves(root, referenceRoot = null) {
   const result = new Map();
 
-  const walk = (value, tokens, parent, key) => {
+  const getEntryId = entry => entry && typeof entry === "object"
+    ? (entry._id ?? entry.id ?? null)
+    : null;
+
+  const walk = (value, tokens, parent, key, referenceValue) => {
     if (typeof value === "string") {
       result.set(JSON.stringify(tokens), {
         value,
@@ -451,22 +455,53 @@ function indexStringLeaves(root) {
     }
 
     if (Array.isArray(value)) {
+      const referenceArray = Array.isArray(referenceValue) ? referenceValue : null;
+
       value.forEach((entry, index) => {
-        const token = entry && typeof entry === "object" && (entry._id ?? entry.id)
-          ? { id: entry._id ?? entry.id }
-          : { index };
-        walk(entry, [...tokens, token], value, index);
+        const ownId = getEntryId(entry);
+        let referenceEntry = referenceArray?.[index] ?? null;
+
+        // Prefer an exact stable-ID match when both sides still have IDs.
+        if (ownId && referenceArray) {
+          referenceEntry = referenceArray.find(candidate => getEntryId(candidate) === ownId)
+            ?? referenceEntry;
+        }
+
+        const referenceId = getEntryId(referenceEntry);
+
+        // Some translation tools rebuild array entries and accidentally remove
+        // technical IDs (Ember quest outcomes are a real example). When that
+        // happens, borrow the incoming Adventure's ID for the same array slot
+        // so the translated local entry can still match the baseline safely.
+        const token = referenceId
+          ? { id: referenceId }
+          : ownId
+            ? { id: ownId }
+            : { index };
+
+        walk(entry, [...tokens, token], value, index, referenceEntry);
       });
       return;
     }
 
     if (!value || typeof value !== "object") return;
+
+    const referenceObject = referenceValue && typeof referenceValue === "object" && !Array.isArray(referenceValue)
+      ? referenceValue
+      : null;
+
     for (const [childKey, entry] of Object.entries(value)) {
-      walk(entry, [...tokens, childKey], value, childKey);
+      walk(
+        entry,
+        [...tokens, childKey],
+        value,
+        childKey,
+        referenceObject?.[childKey]
+      );
     }
   };
 
-  walk(root, [], { root }, "root");
+  walk(root, [], { root }, "root", referenceRoot);
   return result;
 }
 
@@ -501,7 +536,7 @@ function runTranslationMerge(toUpdate = {}, baseline, mutate) {
 
       stats.documentsCompared += 1;
       const localObject = current.toObject();
-      const localStrings = indexStringLeaves(localObject);
+      const localStrings = indexStringLeaves(localObject, incoming);
       const newStrings = indexStringLeaves(incoming);
 
       for (const [path, oldValue] of Object.entries(oldDoc.strings ?? {})) {
@@ -600,7 +635,11 @@ function isTranslatablePath(documentName, path) {
     "flaw",
     "trait",
     "personality",
-    "text"
+    "text",
+    // Ember Adventure custom narrative fields.
+    "overview",
+    "exposition",
+    "gamemaster"
   ]);
 
   if (directTextFields.has(last)) return true;
@@ -620,6 +659,9 @@ function isTranslatablePath(documentName, path) {
     ]);
     if (semanticValueParents.has(parent)) return true;
   }
+
+  // D&D5e stores alternate chat-card prose under system.description.chat.
+  if (last === "chat" && parent === "description") return true;
 
   // Macros contain executable source in "command"; never treat it as translation text.
   if (documentName === "Macro") return last === "name";
