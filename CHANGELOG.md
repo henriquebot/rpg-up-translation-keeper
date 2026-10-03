@@ -1,3 +1,10 @@
+## 0.2.3
+
+- Preserva campos narrativos específicos do Ember: `overview`, `exposition` e `gamemaster`.
+- Preserva texto alternativo de chat do D&D5e em `system.description.chat`.
+- Corrige o pareamento de arrays quando uma tradução antiga removeu IDs técnicos de entradas, como `system.outcomes[].id`: o Keeper usa o ID da Adventure nova no mesmo slot como referência segura.
+- O ajuste foi motivado pelo diagnóstico real de `Glitter in the Dark`, em que 45 campos traduzidos não foram preservados na atualização 0.6.1 → 0.6.2.
+
 # Changelog
 
 ## 0.2.1
