@@ -456,15 +456,21 @@ function indexStringLeaves(root, referenceRoot = null) {
 
     if (Array.isArray(value)) {
       const referenceArray = Array.isArray(referenceValue) ? referenceValue : null;
+      const referenceById = referenceArray
+        ? new Map(
+            referenceArray
+              .map(entry => [getEntryId(entry), entry])
+              .filter(([id]) => Boolean(id))
+          )
+        : null;
 
       value.forEach((entry, index) => {
         const ownId = getEntryId(entry);
         let referenceEntry = referenceArray?.[index] ?? null;
 
         // Prefer an exact stable-ID match when both sides still have IDs.
-        if (ownId && referenceArray) {
-          referenceEntry = referenceArray.find(candidate => getEntryId(candidate) === ownId)
-            ?? referenceEntry;
+        if (ownId && referenceById?.has(ownId)) {
+          referenceEntry = referenceById.get(ownId);
         }
 
         const referenceId = getEntryId(referenceEntry);
