@@ -1,3 +1,11 @@
+## 0.2.4
+
+- Sincroniza automaticamente os Outcomes narrativos do Ember com os Journals do mundo após o carregamento.
+- Reaplica traduções de `label` e `summary` ao runtime do Ember quando o `ember.mjs` recria Outcomes sem esses textos.
+- Usa a Adventure instalada como referência apenas para mapear com segurança o ID e a ordem dos Outcomes; o texto do mundo tem prioridade, preservando traduções e edições manuais.
+- Ao atualizar `system.outcomes` de uma JournalEntryPage, sincroniza somente a página afetada.
+- Páginas que não existem na Adventure de referência ou mapeamentos ambíguos são ignorados, sem sobrescrever o runtime.
+
 ## 0.2.3
 
 - Preserva campos narrativos específicos do Ember: `overview`, `exposition` e `gamemaster`.
