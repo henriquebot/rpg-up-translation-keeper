@@ -2,7 +2,7 @@
 
 Proteção de traduções para atualizações de **Adventures** no Foundry VTT v14.
 
-## O que a v0.2.0 faz
+## O que a v0.2.4 faz
 
 Quando o GM tenta usar **Import Adventure**, o módulo interrompe a operação antes da sobrescrita e executa um fluxo seguro:
 
@@ -13,7 +13,8 @@ Quando o GM tenta usar **Import Adventure**, o módulo interrompe a operação a
 5. preserva automaticamente campos locais cujo original não mudou;
 6. em HTML, preserva também nós de texto individuais quando apenas parte do conteúdo mudou;
 7. deixa em inglês apenas campos/trechos que realmente mudaram no original;
-8. depois de uma importação bem-sucedida, salva a nova baseline para a próxima atualização.
+8. depois de uma importação bem-sucedida, salva a nova baseline para a próxima atualização;
+9. sincroniza automaticamente os **Outcomes narrativos do Ember** com os Journals já traduzidos após recarregar o Foundry ou atualizar uma página, preservando traduções locais e ignorando mapeamentos ambíguos.
 
 ## Primeira atualização protegida
 
