@@ -1,8 +1,8 @@
 {
   "id": "rpg-up-translation-keeper",
   "title": "RPG Up Translation Keeper",
-  "description": "Protege traduções ao atualizar Adventures no Foundry VTT, incluindo campos narrativos do Ember e arrays que perderam IDs durante traduções.",
-  "version": "0.2.3",
+  "description": "Protege traduções ao atualizar Adventures no Foundry VTT e sincroniza Outcomes narrativos do Ember após recarregamentos e traduções.",
+  "version": "0.2.4",
   "type": "module",
   "authors": [
     {
