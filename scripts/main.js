@@ -19,6 +19,12 @@ const ADVENTURE_FIELDS = {
 let bypassContext = null;
 let protectionFlowRunning = false;
 
+let emberOutcomeSourceIndexPromise = null;
+let emberOutcomeSyncTimer = null;
+let emberOutcomeSyncAll = false;
+let emberOutcomeSyncReason = "manual";
+const emberOutcomeSyncPageKeys = new Set();
+
 Hooks.once("init", () => {
   game.settings.register(MODULE_ID, "enabled", {
     name: "Proteger importação de Adventures",
@@ -69,6 +75,7 @@ Hooks.once("ready", () => {
       downloadBackup,
       getBaselineStatus,
       importBaselineFromObject,
+      syncEmberNarrativeOutcomes,
       exportBaseline: async adventure => {
         const baseline = getStoredBaseline(adventure);
         if (!baseline) throw new Error("Nenhuma baseline salva para esta Adventure.");
@@ -77,10 +84,333 @@ Hooks.once("ready", () => {
     };
   }
 
+  scheduleEmberOutcomeSync({
+    full: true,
+    reason: "ready",
+    delay: 0
+  });
+
   if (game.user?.isGM) {
     console.log(`${MODULE_TITLE} | Proteção de Adventure Import ativa.`);
   }
 });
+
+Hooks.on("updateJournalEntryPage", (page, changes) => {
+  if (!game.ready) return;
+  if (!journalPageUpdateTouchesOutcomes(changes)) return;
+
+  scheduleEmberOutcomeSync({
+    page,
+    reason: "updateJournalEntryPage",
+    delay: 75
+  });
+});
+
+function journalPageUpdateTouchesOutcomes(changes) {
+  if (!changes || typeof changes !== "object") return false;
+  if (Object.prototype.hasOwnProperty.call(changes, "system.outcomes")) return true;
+  if (changes.system && Object.prototype.hasOwnProperty.call(changes.system, "outcomes")) return true;
+  return Object.keys(changes).some(key => key.startsWith("system.outcomes"));
+}
+
+function getJournalPageKey(journalId, pageId) {
+  if (!journalId || !pageId) return null;
+  return `${journalId}::${pageId}`;
+}
+
+function getJournalPageIdsFromUuid(uuid) {
+  const parts = String(uuid ?? "").split(".");
+  const journalIndex = parts.indexOf("JournalEntry");
+  const pageIndex = parts.indexOf("JournalEntryPage");
+
+  if (
+    journalIndex < 0 ||
+    pageIndex < 0 ||
+    !parts[journalIndex + 1] ||
+    !parts[pageIndex + 1]
+  ) {
+    return null;
+  }
+
+  return {
+    journalId: parts[journalIndex + 1],
+    pageId: parts[pageIndex + 1]
+  };
+}
+
+function getJournalPageKeyFromDocument(page) {
+  return getJournalPageKey(
+    page?.parent?.id ?? page?.parent?._id,
+    page?.id ?? page?._id
+  );
+}
+
+function isBrokenOutcomeText(value, outcomeId) {
+  const text = String(value ?? "").trim();
+
+  return (
+    !text ||
+    text === String(outcomeId ?? "").trim() ||
+    text === "No Journal Summary text is defined for this event!"
+  );
+}
+
+function chooseOutcomeText(worldValue, sourceValue, runtimeValue, outcomeId) {
+  for (const value of [worldValue, sourceValue, runtimeValue]) {
+    if (
+      typeof value === "string" &&
+      !isBrokenOutcomeText(value, outcomeId)
+    ) {
+      return value;
+    }
+  }
+
+  return typeof worldValue === "string"
+    ? worldValue
+    : typeof sourceValue === "string"
+      ? sourceValue
+      : runtimeValue;
+}
+
+async function buildEmberOutcomeSourceIndex() {
+  if (!game.modules.get("ember")?.active) return new Map();
+
+  const pack = game.packs.get("ember.adventure");
+  if (!pack) return new Map();
+
+  const adventures = await pack.getDocuments();
+  const index = new Map();
+
+  for (const adventure of adventures) {
+    const source = adventure.toObject();
+
+    for (const journal of source.journal ?? []) {
+      for (const page of journal.pages ?? []) {
+        const outcomes = page.system?.outcomes;
+        if (!Array.isArray(outcomes) || !outcomes.length) continue;
+
+        const key = getJournalPageKey(journal._id, page._id);
+        if (!key) continue;
+
+        index.set(key, {
+          journalId: journal._id,
+          pageId: page._id,
+          outcomes: outcomes.map(outcome => ({
+            id: outcome?.id ?? null,
+            label: outcome?.label ?? "",
+            summary: outcome?.summary ?? ""
+          }))
+        });
+      }
+    }
+  }
+
+  return index;
+}
+
+async function getEmberOutcomeSourceIndex() {
+  if (!emberOutcomeSourceIndexPromise) {
+    emberOutcomeSourceIndexPromise = buildEmberOutcomeSourceIndex()
+      .catch(error => {
+        emberOutcomeSourceIndexPromise = null;
+        throw error;
+      });
+  }
+
+  return emberOutcomeSourceIndexPromise;
+}
+
+async function syncEmberNarrativeOutcomes({
+  pageKeys = null,
+  reason = "manual"
+} = {}) {
+  const events = globalThis.ember?.narrative?.events;
+
+  const stats = {
+    reason,
+    eventsChecked: 0,
+    outcomesMapped: 0,
+    outcomesUpdated: 0,
+    fieldsUpdated: 0,
+    outcomesUnmapped: 0,
+    worldPagesMissing: 0
+  };
+
+  if (!events || !game.modules.get("ember")?.active) {
+    return stats;
+  }
+
+  const sourceIndex = await getEmberOutcomeSourceIndex();
+  if (!sourceIndex.size) return stats;
+
+  const restrictToPages = pageKeys instanceof Set && pageKeys.size
+    ? pageKeys
+    : null;
+
+  for (const event of Object.values(events)) {
+    if (!event?.page || !event?.outcomes) continue;
+
+    const ids = getJournalPageIdsFromUuid(event.page);
+    if (!ids) {
+      stats.outcomesUnmapped += Object.keys(event.outcomes).length;
+      continue;
+    }
+
+    const pageKey = getJournalPageKey(ids.journalId, ids.pageId);
+    if (!pageKey) continue;
+    if (restrictToPages && !restrictToPages.has(pageKey)) continue;
+
+    stats.eventsChecked += 1;
+
+    const sourcePage = sourceIndex.get(pageKey);
+    if (!sourcePage) {
+      stats.outcomesUnmapped += Object.keys(event.outcomes).length;
+      continue;
+    }
+
+    const worldPage = game.journal
+      ?.get(ids.journalId)
+      ?.pages
+      ?.get(ids.pageId);
+
+    if (!worldPage) {
+      stats.worldPagesMissing += 1;
+      continue;
+    }
+
+    const worldOutcomes = worldPage.toObject().system?.outcomes;
+    if (!Array.isArray(worldOutcomes)) continue;
+
+    const sourceOutcomes = sourcePage.outcomes;
+    const sameLength = worldOutcomes.length === sourceOutcomes.length;
+
+    const worldById = new Map(
+      worldOutcomes
+        .map(outcome => [outcome?.id, outcome])
+        .filter(([id]) => Boolean(id))
+    );
+
+    sourceOutcomes.forEach((sourceOutcome, index) => {
+      if (!sourceOutcome?.id) return;
+
+      const runtimeOutcome = event.outcomes[sourceOutcome.id];
+      if (!runtimeOutcome) {
+        stats.outcomesUnmapped += 1;
+        return;
+      }
+
+      const worldOutcome = worldById.get(sourceOutcome.id)
+        ?? (sameLength ? worldOutcomes[index] : null);
+
+      if (!worldOutcome) {
+        stats.outcomesUnmapped += 1;
+        return;
+      }
+
+      stats.outcomesMapped += 1;
+
+      const nextLabel = chooseOutcomeText(
+        worldOutcome.label,
+        sourceOutcome.label,
+        runtimeOutcome.label,
+        sourceOutcome.id
+      );
+
+      const nextSummary = chooseOutcomeText(
+        worldOutcome.summary,
+        sourceOutcome.summary,
+        runtimeOutcome.text?.summary,
+        sourceOutcome.id
+      );
+
+      let changed = false;
+
+      if (
+        typeof nextLabel === "string" &&
+        runtimeOutcome.label !== nextLabel
+      ) {
+        runtimeOutcome.label = nextLabel;
+        stats.fieldsUpdated += 1;
+        changed = true;
+      }
+
+      if (typeof nextSummary === "string") {
+        runtimeOutcome.text ??= {};
+
+        if (runtimeOutcome.text.summary !== nextSummary) {
+          runtimeOutcome.text.summary = nextSummary;
+          stats.fieldsUpdated += 1;
+          changed = true;
+        }
+      }
+
+      if (changed) stats.outcomesUpdated += 1;
+    });
+  }
+
+  return stats;
+}
+
+function scheduleEmberOutcomeSync({
+  page = null,
+  full = false,
+  reason = "manual",
+  delay = 75
+} = {}) {
+  if (!game.modules.get("ember")?.active) return;
+
+  if (full) {
+    emberOutcomeSyncAll = true;
+    emberOutcomeSyncPageKeys.clear();
+  } else if (!emberOutcomeSyncAll) {
+    const pageKey = getJournalPageKeyFromDocument(page);
+    if (!pageKey) return;
+    emberOutcomeSyncPageKeys.add(pageKey);
+  }
+
+  emberOutcomeSyncReason = reason;
+
+  if (emberOutcomeSyncTimer) {
+    window.clearTimeout(emberOutcomeSyncTimer);
+  }
+
+  emberOutcomeSyncTimer = window.setTimeout(async () => {
+    emberOutcomeSyncTimer = null;
+
+    const fullSync = emberOutcomeSyncAll;
+    const pageKeys = fullSync
+      ? null
+      : new Set(emberOutcomeSyncPageKeys);
+
+    emberOutcomeSyncAll = false;
+    emberOutcomeSyncPageKeys.clear();
+
+    if (!fullSync && !pageKeys.size) return;
+
+    try {
+      const result = await syncEmberNarrativeOutcomes({
+        pageKeys,
+        reason: emberOutcomeSyncReason
+      });
+
+      if (
+        result.outcomesMapped ||
+        result.outcomesUnmapped ||
+        result.fieldsUpdated
+      ) {
+        console.log(
+          `${MODULE_TITLE} | Outcomes narrativos do Ember sincronizados`,
+          result
+        );
+      }
+    } catch (error) {
+      console.warn(
+        `${MODULE_TITLE} | Falha ao sincronizar Outcomes narrativos do Ember`,
+        error
+      );
+    }
+  }, delay);
+}
 
 Hooks.on("preImportAdventure", (adventure, options, toCreate, toUpdate) => {
   if (!game.user?.isGM) return;
