@@ -967,9 +967,23 @@ function runTranslationMerge(toUpdate = {}, baseline, mutate) {
 
       stats.documentsCompared += 1;
       const localObject = current.toObject();
+      const textArrayPaths = new Set();
+      for (const path of Object.keys(oldDoc.strings ?? {})) {
+        if (!isTranslatablePath(documentName, path)) continue;
+        let tokens;
+        try { tokens = JSON.parse(path); } catch { continue; }
+        tokens.forEach((token, index) => {
+          if (token && typeof token === "object" && token.id) {
+            textArrayPaths.add(JSON.stringify(tokens.slice(0, index)));
+          }
+        });
+      }
       const localStrings = indexStringLeaves(
         localObject, incoming, oldDoc.strings,
-        () => { stats.unsafeArrayMappings += 1; }
+        (arrayTokens) => {
+          // Ignore ID-less technical arrays without user-facing text.
+          if (textArrayPaths.has(JSON.stringify(arrayTokens))) stats.unsafeArrayMappings += 1;
+        }
       );
       const newStrings = indexStringLeaves(incoming);
 
