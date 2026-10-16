@@ -590,10 +590,16 @@ async function runProtectionFlow(adventure, options, toCreate, toUpdate) {
     bypassContext = null;
 
     if (coreImportCompleted) {
+      const pack = adventure.pack ?? adventure.collection?.collection ?? null;
+      const packageName = pack?.split(".")[0] ?? null;
       const newBaseline = buildBaselineFromAdventureSource(adventure.toObject(), {
         source: "post-import",
         adventureId: adventure.id ?? null,
         adventureName: adventure.name ?? null,
+        pack,
+        systemId: game.system?.id ?? null,
+        systemVersion: game.system?.version ?? null,
+        sourceVersion: packageName ? game.modules.get(packageName)?.version ?? null : null,
         capturedAt: new Date().toISOString()
       });
 
@@ -687,36 +693,44 @@ function importBaselineFromObject(data, adventure) {
 
   if (data.backupType === "EMBER_TRANSLATION_BACKUP" && Array.isArray(data.emberAdventureBaseline)) {
     const entries = data.emberAdventureBaseline;
-    const match = entries.find(entry => entry?.id === adventure?.id)
-      ?? entries.find(entry => entry?.name === adventure?.name)
-      ?? (entries.length === 1 ? entries[0] : null);
+    const match = entries.find(entry => entry?.id && entry.id === adventure?.id)
+      ?? entries.find(entry => !entry?.id && entry?.name === adventure?.name);
 
-    if (!match?.data) throw new Error("Não encontrei esta Adventure dentro do backup antigo.");
+    if (!match?.data) throw new Error("Não encontrei uma Adventure com ID/nome correspondente no backup antigo.");
 
-    return buildBaselineFromAdventureSource(match.data, {
+    return validateBaseline(buildBaselineFromAdventureSource(match.data, {
       source: "ember-translation-backup",
       adventureId: match.id ?? adventure?.id ?? null,
       adventureName: match.name ?? adventure?.name ?? null,
+      pack: match.pack ?? null,
+      systemId: data.environment?.systemId ?? null,
       capturedAt: data.createdAt ?? null
-    });
+    }), adventure);
   }
 
   if (data.backupType === "RPG_UP_TRANSLATION_KEEPER_ADVENTURE_IMPORT" && data.adventure?.incomingSource) {
-    return buildBaselineFromAdventureSource(data.adventure.incomingSource, {
+    return validateBaseline(buildBaselineFromAdventureSource(data.adventure.incomingSource, {
       source: "translation-keeper-backup",
-      adventureId: data.adventure.id ?? adventure?.id ?? null,
-      adventureName: data.adventure.name ?? adventure?.name ?? null,
+      adventureId: data.adventure.id ?? null,
+      adventureName: data.adventure.name ?? null,
+      pack: data.adventure.pack ?? null,
+      systemId: data.environment?.systemId ?? null,
+      systemVersion: data.environment?.systemVersion ?? null,
+      sourceVersion: data.environment?.sourceVersion ?? null,
       capturedAt: data.createdAt ?? null
-    });
+    }), adventure);
   }
 
   if (data.actors || data.items || data.journal || data.scenes || data.tables) {
-    return buildBaselineFromAdventureSource(data, {
+    if (!data._id || data._id !== adventure?.id) {
+      throw new Error("JSON bruto sem ID correspondente à Adventure.");
+    }
+    return validateBaseline(buildBaselineFromAdventureSource(data, {
       source: "raw-adventure-json",
-      adventureId: data._id ?? adventure?.id ?? null,
-      adventureName: data.name ?? adventure?.name ?? null,
+      adventureId: data._id,
+      adventureName: data.name ?? null,
       capturedAt: new Date().toISOString()
-    });
+    }), adventure);
   }
 
   throw new Error("Esse JSON não contém uma baseline de Adventure reconhecida.");
@@ -729,8 +743,18 @@ function validateBaseline(baseline, adventure) {
 
   const expectedId = adventure?.id ?? null;
   const storedId = baseline.meta?.adventureId ?? null;
-  if (expectedId && storedId && expectedId !== storedId) {
-    throw new Error(`A baseline pertence à Adventure ${storedId}, não ${expectedId}.`);
+  if (!expectedId || !storedId || expectedId !== storedId) {
+    throw new Error(`ID da baseline inválido: esperado ${expectedId ?? "desconhecido"}, recebido ${storedId ?? "ausente"}.`);
+  }
+  const expectedPack = adventure?.pack ?? adventure?.collection?.collection ?? null;
+  if (baseline.meta?.pack && expectedPack && baseline.meta.pack !== expectedPack) {
+    throw new Error(`Compêndio diferente na baseline: ${baseline.meta.pack}.`);
+  }
+  if (baseline.meta?.systemId && game.system?.id && baseline.meta.systemId !== game.system.id) {
+    throw new Error(`Sistema diferente na baseline: ${baseline.meta.systemId}.`);
+  }
+  if (!Object.keys(baseline.documents).length) {
+    throw new Error("A baseline não contém documentos de Adventure identificáveis.");
   }
 
   return baseline;
@@ -1356,11 +1380,13 @@ function sameAdventure(a, b) {
 function getStoredBaseline(adventure) {
   const baselines = game.settings.get(MODULE_ID, "baselines") ?? {};
   const direct = baselines[getAdventureKey(adventure)];
-  if (direct) return direct;
+  if (direct) return validateBaseline(direct, adventure);
 
   const id = adventure?.id ?? null;
   if (!id) return null;
-  return Object.values(baselines).find(entry => entry?.meta?.adventureId === id) ?? null;
+  const matches = Object.values(baselines).filter(entry => entry?.meta?.adventureId === id);
+  if (matches.length > 1) throw new Error("Múltiplas baselines com mesmo ID; verifique o compêndio.");
+  return matches.length ? validateBaseline(matches[0], adventure) : null;
 }
 
 async function saveBaseline(adventure, baseline) {
