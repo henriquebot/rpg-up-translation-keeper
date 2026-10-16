@@ -23,6 +23,8 @@ let emberOutcomeSourceIndexPromise = null;
 let emberOutcomeSyncTimer = null;
 let emberOutcomeSyncAll = false;
 let emberOutcomeSyncReason = "manual";
+let emberOutcomeReadyRetries = 0;
+const EMBER_OUTCOME_MAX_READY_RETRIES = 8;
 const emberOutcomeSyncPageKeys = new Set();
 
 Hooks.once("init", () => {
@@ -87,7 +89,7 @@ Hooks.once("ready", () => {
   scheduleEmberOutcomeSync({
     full: true,
     reason: "ready",
-    delay: 0
+    delay: 500
   });
 
   if (game.user?.isGM) {
@@ -180,8 +182,10 @@ async function buildEmberOutcomeSourceIndex() {
 
   const adventures = await pack.getDocuments();
   const index = new Map();
+  const ambiguous = new Set();
 
   for (const adventure of adventures) {
+    const baseline = getStoredBaseline(adventure);
     const source = adventure.toObject();
 
     for (const journal of source.journal ?? []) {
@@ -192,9 +196,21 @@ async function buildEmberOutcomeSourceIndex() {
         const key = getJournalPageKey(journal._id, page._id);
         if (!key) continue;
 
+        // Duplicate IDs across Adventures cannot be reliably paired to a world page.
+        if (ambiguous.has(key)) continue;
+        if (index.has(key)) {
+          index.delete(key);
+          ambiguous.add(key);
+          continue;
+        }
+
         index.set(key, {
           journalId: journal._id,
           pageId: page._id,
+          baselineOutcomeIds: getBaselineArrayIds(
+            baseline?.documents?.JournalEntry?.[journal._id]?.strings,
+            ["pages", { id: page._id }, "system", "outcomes"]
+          ),
           outcomes: outcomes.map(outcome => ({
             id: outcome?.id ?? null,
             label: outcome?.label ?? "",
@@ -282,7 +298,16 @@ async function syncEmberNarrativeOutcomes({
     if (!Array.isArray(worldOutcomes)) continue;
 
     const sourceOutcomes = sourcePage.outcomes;
-    const sameLength = worldOutcomes.length === sourceOutcomes.length;
+    const sourceIds = sourceOutcomes.map(outcome => outcome.id);
+    if (!sourceIds.every(Boolean) || new Set(sourceIds).size !== sourceIds.length) {
+      stats.outcomesUnmapped += Object.keys(event.outcomes).length;
+      continue;
+    }
+
+    // Positional recovery only when the baseline proves the source order is unchanged.
+    const stableOrder = worldOutcomes.length === sourceOutcomes.length
+      && sourceIds.length === sourcePage.baselineOutcomeIds?.length
+      && sourceIds.every((id, index) => id === sourcePage.baselineOutcomeIds[index]);
 
     const worldById = new Map(
       worldOutcomes
@@ -299,8 +324,10 @@ async function syncEmberNarrativeOutcomes({
         return;
       }
 
-      const worldOutcome = worldById.get(sourceOutcome.id)
-        ?? (sameLength ? worldOutcomes[index] : null);
+      const byPosition = stableOrder && !worldOutcomes[index]?.id
+        ? worldOutcomes[index]
+        : null;
+      const worldOutcome = worldById.get(sourceOutcome.id) ?? byPosition;
 
       if (!worldOutcome) {
         stats.outcomesUnmapped += 1;
@@ -376,6 +403,17 @@ function scheduleEmberOutcomeSync({
 
   emberOutcomeSyncTimer = window.setTimeout(async () => {
     emberOutcomeSyncTimer = null;
+
+    // Ember can finish initializing its narrative runtime after Foundry's ready event.
+    if (reason === "ready" && !Object.keys(globalThis.ember?.narrative?.events ?? {}).length) {
+      if (emberOutcomeReadyRetries++ < EMBER_OUTCOME_MAX_READY_RETRIES) {
+        scheduleEmberOutcomeSync({ full: true, reason: "ready", delay: 1000 });
+      } else {
+        console.warn(`${MODULE_TITLE} | Narrative runtime unavailable after startup retries.`);
+      }
+      return;
+    }
+    emberOutcomeReadyRetries = 0;
 
     const fullSync = emberOutcomeSyncAll;
     const pageKeys = fullSync
@@ -765,7 +803,26 @@ function collectStringLeaves(root) {
   return result;
 }
 
-function indexStringLeaves(root, referenceRoot = null) {
+function getBaselineArrayIds(strings, arrayPath) {
+  if (!strings) return null;
+  const prefix = JSON.stringify(arrayPath);
+  const ids = [];
+  const seen = new Set();
+  for (const path of Object.keys(strings)) {
+    let tokens;
+    try { tokens = JSON.parse(path); } catch { continue; }
+    if (JSON.stringify(tokens.slice(0, arrayPath.length)) !== prefix) continue;
+    const next = tokens[arrayPath.length];
+    if (!next || typeof next !== "object" || !next.id) continue;
+    if (!seen.has(next.id)) {
+      ids.push(next.id);
+      seen.add(next.id);
+    }
+  }
+  return ids.length ? ids : null;
+}
+
+function indexStringLeaves(root, referenceRoot = null, baselineStrings = null) {
   const result = new Map();
 
   const getEntryId = entry => entry && typeof entry === "object"
@@ -794,25 +851,24 @@ function indexStringLeaves(root, referenceRoot = null) {
           )
         : null;
 
+      const referenceIds = referenceArray?.map(getEntryId) ?? null;
+      const baselineIds = getBaselineArrayIds(baselineStrings, tokens);
+      const safePositionalIds = referenceIds
+        && baselineIds?.length === referenceIds.length
+        && value.length === referenceIds.length
+        && referenceIds.every((id, index) => Boolean(id) && id === baselineIds[index]);
+
       value.forEach((entry, index) => {
         const ownId = getEntryId(entry);
-        let referenceEntry = referenceArray?.[index] ?? null;
-
-        // Prefer an exact stable-ID match when both sides still have IDs.
-        if (ownId && referenceById?.has(ownId)) {
-          referenceEntry = referenceById.get(ownId);
-        }
-
+        // Known IDs must never be reassigned to unrelated source entries.
+        const referenceEntry = ownId
+          ? referenceById?.get(ownId) ?? null
+          : (safePositionalIds ? referenceArray?.[index] : null);
         const referenceId = getEntryId(referenceEntry);
-
-        // Some translation tools rebuild array entries and accidentally remove
-        // technical IDs (Ember quest outcomes are a real example). When that
-        // happens, borrow the incoming Adventure's ID for the same array slot
-        // so the translated local entry can still match the baseline safely.
-        const token = referenceId
-          ? { id: referenceId }
-          : ownId
-            ? { id: ownId }
+        const token = ownId
+          ? { id: ownId }
+          : referenceId
+            ? { id: referenceId }
             : { index };
 
         walk(entry, [...tokens, token], value, index, referenceEntry);
@@ -872,7 +928,7 @@ function runTranslationMerge(toUpdate = {}, baseline, mutate) {
 
       stats.documentsCompared += 1;
       const localObject = current.toObject();
-      const localStrings = indexStringLeaves(localObject, incoming);
+      const localStrings = indexStringLeaves(localObject, incoming, oldDoc.strings);
       const newStrings = indexStringLeaves(incoming);
 
       for (const [path, oldValue] of Object.entries(oldDoc.strings ?? {})) {
@@ -931,6 +987,7 @@ function isTranslatablePath(documentName, path) {
   const blockedContainers = new Set([
     "_stats",
     "flags",
+    "hooks",
     "ownership",
     "permission",
     "permissions",
@@ -979,6 +1036,7 @@ function isTranslatablePath(documentName, path) {
   ]);
 
   if (directTextFields.has(last)) return true;
+  if (last === "secrets" && parent === "development") return true;
 
   if (last === "value") {
     const semanticValueParents = new Set([
