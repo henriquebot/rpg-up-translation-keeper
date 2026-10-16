@@ -2,7 +2,7 @@
 
 Proteção de traduções para atualizações de **Adventures** no Foundry VTT v14.
 
-## O que a v0.2.4 faz
+## O que a v0.2.5 faz
 
 Quando o GM tenta usar **Import Adventure**, o módulo interrompe a operação antes da sobrescrita e executa um fluxo seguro:
 
@@ -41,8 +41,23 @@ Se o texto original mudou de verdade, o módulo não inventa uma tradução nova
 ## Compatibilidade
 
 - Foundry VTT 14+
-- Verificado inicialmente em Foundry 14.368
+- Compatibilidade declarada com Foundry 14.369 (testes automatizados de regressão; validar em cópia de mundo)
 
 Manifest:
 
 `https://raw.githubusercontent.com/henriquebot/rpg-up-translation-keeper/main/module.json`
+
+## Atualizações v0.2.5 e situações bloqueadas
+
+- Protege `system.development.secrets` e exclui campos técnicos de `hooks`.
+- Para associar traduções de arrays sem IDs (como `system.outcomes`), exige que a **ordem e quantidade de IDs da baseline antiga sejam iguais às da nova Adventure**.
+- Se a associação for ambígua, bloqueia a importação e mostra uma notificação: não force o merge nem atualize as traduções manualmente sem antes fazer um snapshot do mundo.
+- Baselines antigas continuam aceitas quando possuem ID válido da Adventure. Metadados de compêndio e sistema são verificados quando estão presentes.
+- Uma baseline exportada do conteúdo **novo** não substitui a baseline da versão antiga; preserve o backup anterior.
+- O runtime narrativo do Ember pode iniciar depois do hook `ready`: o Keeper repete a sincronização por um período limitado.
+
+**Limitação:** o Ember é proprietário/protegido e os testes automáticos não executam seu runtime real. Antes de atualizar a campanha G9, teste em uma cópia do mundo e confira diálogos, segredos e Outcomes traduzidos.
+
+## Testes
+
+`node --check scripts/main.js` e `node --test tests/*.test.cjs`.
