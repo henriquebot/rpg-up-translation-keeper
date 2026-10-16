@@ -2,34 +2,69 @@ name: Build Foundry Release
 
 on:
   push:
-    tags:
-      - "v*"
+    branches: [main]
+    tags: ["v*"]
+    paths:
+      - "module.json"
 
 permissions:
   contents: write
+
+concurrency:
+  group: foundry-release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Build module zip
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Verify code and translation safety
         run: |
-          zip -r rpg-up-translation-keeper.zip \
-            module.json \
-            scripts \
-            styles \
-            README.md \
-            CHANGELOG.md \
-            LICENSE
-
-      - name: Create GitHub release
+          node --check scripts/main.js
+          node --test tests/*.test.cjs
+      - name: Determine and verify version tag
+        id: version
+        shell: bash
+        run: |
+          VERSION="$(node -p "require('./module.json').version")"
+          TAG="v${VERSION}"
+          if [[ "${GITHUB_REF_TYPE}" == "tag" && "${GITHUB_REF_NAME}" != "${TAG}" ]]; then
+            echo "Ref ${GITHUB_REF_NAME} does not match module.json version ${VERSION}" >&2
+            exit 1
+          fi
+          echo "tag=${TAG}" >> "${GITHUB_OUTPUT}"
+      - name: Create version tag on main version bump
+        if: github.ref_type == 'branch'
+        shell: bash
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "Tag ${TAG} already exists; will not move it."
+          else
+            git tag "${TAG}"
+            git push origin "${TAG}"
+          fi
+      - name: Build installable Foundry package
+        run: |
+          zip -r rpg-up-translation-keeper.zip module.json scripts styles README.md CHANGELOG.md LICENSE
+          unzip -t rpg-up-translation-keeper.zip
+      - name: Publish GitHub release if absent
         env:
           GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
-          gh release create "${GITHUB_REF_NAME}" \
-            rpg-up-translation-keeper.zip \
-            --title "RPG Up Translation Keeper ${GITHUB_REF_NAME}" \
-            --generate-notes
+          TAG="${{ steps.version.outputs.tag }}"
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            echo "Release ${TAG} already exists; not overwriting it."
+          else
+            gh release create "${TAG}" rpg-up-translation-keeper.zip \
+              --target "${GITHUB_SHA}" \
+              --title "RPG Up Translation Keeper ${TAG}" \
+              --generate-notes
+          fi
