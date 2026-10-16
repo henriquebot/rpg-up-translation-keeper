@@ -23,6 +23,8 @@ let emberOutcomeSourceIndexPromise = null;
 let emberOutcomeSyncTimer = null;
 let emberOutcomeSyncAll = false;
 let emberOutcomeSyncReason = "manual";
+let emberOutcomeReadyRetries = 0;
+const EMBER_OUTCOME_MAX_READY_RETRIES = 8;
 const emberOutcomeSyncPageKeys = new Set();
 
 Hooks.once("init", () => {
@@ -87,7 +89,7 @@ Hooks.once("ready", () => {
   scheduleEmberOutcomeSync({
     full: true,
     reason: "ready",
-    delay: 0
+    delay: 500
   });
 
   if (game.user?.isGM) {
@@ -180,8 +182,10 @@ async function buildEmberOutcomeSourceIndex() {
 
   const adventures = await pack.getDocuments();
   const index = new Map();
+  const ambiguous = new Set();
 
   for (const adventure of adventures) {
+    const baseline = getStoredBaseline(adventure);
     const source = adventure.toObject();
 
     for (const journal of source.journal ?? []) {
@@ -192,9 +196,21 @@ async function buildEmberOutcomeSourceIndex() {
         const key = getJournalPageKey(journal._id, page._id);
         if (!key) continue;
 
+        // Duplicate IDs across Adventures cannot be reliably paired to a world page.
+        if (ambiguous.has(key)) continue;
+        if (index.has(key)) {
+          index.delete(key);
+          ambiguous.add(key);
+          continue;
+        }
+
         index.set(key, {
           journalId: journal._id,
           pageId: page._id,
+          baselineOutcomeIds: getBaselineArrayIds(
+            baseline?.documents?.JournalEntry?.[journal._id]?.strings,
+            ["pages", { id: page._id }, "system", "outcomes"]
+          ),
           outcomes: outcomes.map(outcome => ({
             id: outcome?.id ?? null,
             label: outcome?.label ?? "",
@@ -282,7 +298,16 @@ async function syncEmberNarrativeOutcomes({
     if (!Array.isArray(worldOutcomes)) continue;
 
     const sourceOutcomes = sourcePage.outcomes;
-    const sameLength = worldOutcomes.length === sourceOutcomes.length;
+    const sourceIds = sourceOutcomes.map(outcome => outcome.id);
+    if (!sourceIds.every(Boolean) || new Set(sourceIds).size !== sourceIds.length) {
+      stats.outcomesUnmapped += Object.keys(event.outcomes).length;
+      continue;
+    }
+
+    // Positional recovery only when the baseline proves the source order is unchanged.
+    const stableOrder = worldOutcomes.length === sourceOutcomes.length
+      && sourceIds.length === sourcePage.baselineOutcomeIds?.length
+      && sourceIds.every((id, index) => id === sourcePage.baselineOutcomeIds[index]);
 
     const worldById = new Map(
       worldOutcomes
@@ -299,8 +324,10 @@ async function syncEmberNarrativeOutcomes({
         return;
       }
 
-      const worldOutcome = worldById.get(sourceOutcome.id)
-        ?? (sameLength ? worldOutcomes[index] : null);
+      const byPosition = stableOrder && !worldOutcomes[index]?.id
+        ? worldOutcomes[index]
+        : null;
+      const worldOutcome = worldById.get(sourceOutcome.id) ?? byPosition;
 
       if (!worldOutcome) {
         stats.outcomesUnmapped += 1;
@@ -377,6 +404,17 @@ function scheduleEmberOutcomeSync({
   emberOutcomeSyncTimer = window.setTimeout(async () => {
     emberOutcomeSyncTimer = null;
 
+    // Ember can finish initializing its narrative runtime after Foundry's ready event.
+    if (reason === "ready" && !Object.keys(globalThis.ember?.narrative?.events ?? {}).length) {
+      if (emberOutcomeReadyRetries++ < EMBER_OUTCOME_MAX_READY_RETRIES) {
+        scheduleEmberOutcomeSync({ full: true, reason: "ready", delay: 1000 });
+      } else {
+        console.warn(`${MODULE_TITLE} | Narrative runtime unavailable after startup retries.`);
+      }
+      return;
+    }
+    emberOutcomeReadyRetries = 0;
+
     const fullSync = emberOutcomeSyncAll;
     const pageKeys = fullSync
       ? null
@@ -420,6 +458,10 @@ Hooks.on("preImportAdventure", (adventure, options, toCreate, toUpdate) => {
     if (game.settings.get(MODULE_ID, "autoRestore") && bypassContext.baseline) {
       const result = applyTranslationMerge(adventure, toUpdate, bypassContext.baseline);
       bypassContext.mergeResult = result;
+      if (result.unsafeArrayMappings > 0) {
+        ui.notifications.error(`${MODULE_TITLE}: a importação foi bloqueada: arrays traduzidos sem IDs estáveis.`, { permanent: true });
+        return false;
+      }
       console.log(`${MODULE_TITLE} | Merge aplicado antes da importação`, result);
     }
     return true;
@@ -468,6 +510,14 @@ async function runProtectionFlow(adventure, options, toCreate, toUpdate) {
   const preview = baseline
     ? previewTranslationMerge(toUpdate, baseline)
     : emptyMergeStats();
+
+  if (preview.unsafeArrayMappings > 0) {
+    ui.notifications.error(
+      `${MODULE_TITLE}: ${preview.unsafeArrayMappings} entrada(s) sem ID mudaram de posição ou quantidade. Importe somente após corrigir os IDs ou preparar outra baseline segura.`,
+      { permanent: true }
+    );
+    return;
+  }
 
   const action = await foundry.applications.api.DialogV2.wait({
     window: { title: `🛡️ ${MODULE_TITLE}` },
@@ -552,10 +602,16 @@ async function runProtectionFlow(adventure, options, toCreate, toUpdate) {
     bypassContext = null;
 
     if (coreImportCompleted) {
+      const pack = adventure.pack ?? adventure.collection?.collection ?? null;
+      const packageName = pack?.split(".")[0] ?? null;
       const newBaseline = buildBaselineFromAdventureSource(adventure.toObject(), {
         source: "post-import",
         adventureId: adventure.id ?? null,
         adventureName: adventure.name ?? null,
+        pack,
+        systemId: game.system?.id ?? null,
+        systemVersion: game.system?.version ?? null,
+        sourceVersion: packageName ? game.modules.get(packageName)?.version ?? null : null,
         capturedAt: new Date().toISOString()
       });
 
@@ -649,36 +705,44 @@ function importBaselineFromObject(data, adventure) {
 
   if (data.backupType === "EMBER_TRANSLATION_BACKUP" && Array.isArray(data.emberAdventureBaseline)) {
     const entries = data.emberAdventureBaseline;
-    const match = entries.find(entry => entry?.id === adventure?.id)
-      ?? entries.find(entry => entry?.name === adventure?.name)
-      ?? (entries.length === 1 ? entries[0] : null);
+    const match = entries.find(entry => entry?.id && entry.id === adventure?.id)
+      ?? entries.find(entry => !entry?.id && entry?.name === adventure?.name);
 
-    if (!match?.data) throw new Error("Não encontrei esta Adventure dentro do backup antigo.");
+    if (!match?.data) throw new Error("Não encontrei uma Adventure com ID/nome correspondente no backup antigo.");
 
-    return buildBaselineFromAdventureSource(match.data, {
+    return validateBaseline(buildBaselineFromAdventureSource(match.data, {
       source: "ember-translation-backup",
       adventureId: match.id ?? adventure?.id ?? null,
       adventureName: match.name ?? adventure?.name ?? null,
+      pack: match.pack ?? null,
+      systemId: data.environment?.systemId ?? null,
       capturedAt: data.createdAt ?? null
-    });
+    }), adventure);
   }
 
   if (data.backupType === "RPG_UP_TRANSLATION_KEEPER_ADVENTURE_IMPORT" && data.adventure?.incomingSource) {
-    return buildBaselineFromAdventureSource(data.adventure.incomingSource, {
+    return validateBaseline(buildBaselineFromAdventureSource(data.adventure.incomingSource, {
       source: "translation-keeper-backup",
-      adventureId: data.adventure.id ?? adventure?.id ?? null,
-      adventureName: data.adventure.name ?? adventure?.name ?? null,
+      adventureId: data.adventure.id ?? null,
+      adventureName: data.adventure.name ?? null,
+      pack: data.adventure.pack ?? null,
+      systemId: data.environment?.systemId ?? null,
+      systemVersion: data.environment?.systemVersion ?? null,
+      sourceVersion: data.environment?.sourceVersion ?? null,
       capturedAt: data.createdAt ?? null
-    });
+    }), adventure);
   }
 
   if (data.actors || data.items || data.journal || data.scenes || data.tables) {
-    return buildBaselineFromAdventureSource(data, {
+    if (!data._id || data._id !== adventure?.id) {
+      throw new Error("JSON bruto sem ID correspondente à Adventure.");
+    }
+    return validateBaseline(buildBaselineFromAdventureSource(data, {
       source: "raw-adventure-json",
-      adventureId: data._id ?? adventure?.id ?? null,
-      adventureName: data.name ?? adventure?.name ?? null,
+      adventureId: data._id,
+      adventureName: data.name ?? null,
       capturedAt: new Date().toISOString()
-    });
+    }), adventure);
   }
 
   throw new Error("Esse JSON não contém uma baseline de Adventure reconhecida.");
@@ -691,8 +755,18 @@ function validateBaseline(baseline, adventure) {
 
   const expectedId = adventure?.id ?? null;
   const storedId = baseline.meta?.adventureId ?? null;
-  if (expectedId && storedId && expectedId !== storedId) {
-    throw new Error(`A baseline pertence à Adventure ${storedId}, não ${expectedId}.`);
+  if (!expectedId || !storedId || expectedId !== storedId) {
+    throw new Error(`ID da baseline inválido: esperado ${expectedId ?? "desconhecido"}, recebido ${storedId ?? "ausente"}.`);
+  }
+  const expectedPack = adventure?.pack ?? adventure?.collection?.collection ?? null;
+  if (baseline.meta?.pack && expectedPack && baseline.meta.pack !== expectedPack) {
+    throw new Error(`Compêndio diferente na baseline: ${baseline.meta.pack}.`);
+  }
+  if (baseline.meta?.systemId && game.system?.id && baseline.meta.systemId !== game.system.id) {
+    throw new Error(`Sistema diferente na baseline: ${baseline.meta.systemId}.`);
+  }
+  if (!Object.keys(baseline.documents).length) {
+    throw new Error("A baseline não contém documentos de Adventure identificáveis.");
   }
 
   return baseline;
@@ -765,7 +839,26 @@ function collectStringLeaves(root) {
   return result;
 }
 
-function indexStringLeaves(root, referenceRoot = null) {
+function getBaselineArrayIds(strings, arrayPath) {
+  if (!strings) return null;
+  const prefix = JSON.stringify(arrayPath);
+  const ids = [];
+  const seen = new Set();
+  for (const path of Object.keys(strings)) {
+    let tokens;
+    try { tokens = JSON.parse(path); } catch { continue; }
+    if (JSON.stringify(tokens.slice(0, arrayPath.length)) !== prefix) continue;
+    const next = tokens[arrayPath.length];
+    if (!next || typeof next !== "object" || !next.id) continue;
+    if (!seen.has(next.id)) {
+      ids.push(next.id);
+      seen.add(next.id);
+    }
+  }
+  return ids.length ? ids : null;
+}
+
+function indexStringLeaves(root, referenceRoot = null, baselineStrings = null, onAmbiguousArray = null) {
   const result = new Map();
 
   const getEntryId = entry => entry && typeof entry === "object"
@@ -794,25 +887,27 @@ function indexStringLeaves(root, referenceRoot = null) {
           )
         : null;
 
+      const referenceIds = referenceArray?.map(getEntryId) ?? null;
+      const baselineIds = getBaselineArrayIds(baselineStrings, tokens);
+      const safePositionalIds = referenceIds
+        && baselineIds?.length === referenceIds.length
+        && value.length === referenceIds.length
+        && referenceIds.every((id, index) => Boolean(id) && id === baselineIds[index]);
+
       value.forEach((entry, index) => {
         const ownId = getEntryId(entry);
-        let referenceEntry = referenceArray?.[index] ?? null;
-
-        // Prefer an exact stable-ID match when both sides still have IDs.
-        if (ownId && referenceById?.has(ownId)) {
-          referenceEntry = referenceById.get(ownId);
+        if (!ownId && referenceIds?.[index] && !safePositionalIds) {
+          onAmbiguousArray?.(tokens, index);
         }
-
+        // Known IDs must never be reassigned to unrelated source entries.
+        const referenceEntry = ownId
+          ? referenceById?.get(ownId) ?? null
+          : (safePositionalIds ? referenceArray?.[index] : null);
         const referenceId = getEntryId(referenceEntry);
-
-        // Some translation tools rebuild array entries and accidentally remove
-        // technical IDs (Ember quest outcomes are a real example). When that
-        // happens, borrow the incoming Adventure's ID for the same array slot
-        // so the translated local entry can still match the baseline safely.
-        const token = referenceId
-          ? { id: referenceId }
-          : ownId
-            ? { id: ownId }
+        const token = ownId
+          ? { id: ownId }
+          : referenceId
+            ? { id: referenceId }
             : { index };
 
         walk(entry, [...tokens, token], value, index, referenceEntry);
@@ -872,7 +967,24 @@ function runTranslationMerge(toUpdate = {}, baseline, mutate) {
 
       stats.documentsCompared += 1;
       const localObject = current.toObject();
-      const localStrings = indexStringLeaves(localObject, incoming);
+      const textArrayPaths = new Set();
+      for (const path of Object.keys(oldDoc.strings ?? {})) {
+        if (!isTranslatablePath(documentName, path)) continue;
+        let tokens;
+        try { tokens = JSON.parse(path); } catch { continue; }
+        tokens.forEach((token, index) => {
+          if (token && typeof token === "object" && token.id) {
+            textArrayPaths.add(JSON.stringify(tokens.slice(0, index)));
+          }
+        });
+      }
+      const localStrings = indexStringLeaves(
+        localObject, incoming, oldDoc.strings,
+        (arrayTokens) => {
+          // Ignore ID-less technical arrays without user-facing text.
+          if (textArrayPaths.has(JSON.stringify(arrayTokens))) stats.unsafeArrayMappings += 1;
+        }
+      );
       const newStrings = indexStringLeaves(incoming);
 
       for (const [path, oldValue] of Object.entries(oldDoc.strings ?? {})) {
@@ -931,6 +1043,7 @@ function isTranslatablePath(documentName, path) {
   const blockedContainers = new Set([
     "_stats",
     "flags",
+    "hooks",
     "ownership",
     "permission",
     "permissions",
@@ -979,6 +1092,7 @@ function isTranslatablePath(documentName, path) {
   ]);
 
   if (directTextFields.has(last)) return true;
+  if (last === "secrets" && parent === "development") return true;
 
   if (last === "value") {
     const semanticValueParents = new Set([
@@ -1080,6 +1194,7 @@ function emptyMergeStats() {
     documentsWithoutBaseline: 0,
     localDifferences: 0,
     ignoredTechnicalDifferences: 0,
+    unsafeArrayMappings: 0,
     safePreservedFields: 0,
     sourceChangedFields: 0,
     htmlFieldsMerged: 0,
@@ -1298,11 +1413,13 @@ function sameAdventure(a, b) {
 function getStoredBaseline(adventure) {
   const baselines = game.settings.get(MODULE_ID, "baselines") ?? {};
   const direct = baselines[getAdventureKey(adventure)];
-  if (direct) return direct;
+  if (direct) return validateBaseline(direct, adventure);
 
   const id = adventure?.id ?? null;
   if (!id) return null;
-  return Object.values(baselines).find(entry => entry?.meta?.adventureId === id) ?? null;
+  const matches = Object.values(baselines).filter(entry => entry?.meta?.adventureId === id);
+  if (matches.length > 1) throw new Error("Múltiplas baselines com mesmo ID; verifique o compêndio.");
+  return matches.length ? validateBaseline(matches[0], adventure) : null;
 }
 
 async function saveBaseline(adventure, baseline) {
