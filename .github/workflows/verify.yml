@@ -1,0 +1,31 @@
+name: Verify Translation Keeper
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/**"
+      - "tests/**"
+      - "module.json"
+      - ".github/workflows/verify.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Syntax check
+        run: node --check scripts/main.js
+      - name: Test translation merge and baseline safety
+        run: node --test tests/*.test.cjs
+      - name: Verify Foundry installation archive contents
+        run: |
+          zip -r /tmp/translation-keeper-smoke.zip module.json scripts styles README.md CHANGELOG.md LICENSE
+          unzip -t /tmp/translation-keeper-smoke.zip
