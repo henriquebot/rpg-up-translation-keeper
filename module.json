@@ -1,8 +1,8 @@
 {
   "id": "rpg-up-translation-keeper",
   "title": "RPG Up Translation Keeper",
-  "description": "Protege traduções ao atualizar Adventures no Foundry VTT e sincroniza Outcomes narrativos do Ember após recarregamentos e traduções.",
-  "version": "0.2.4",
+  "description": "Protege traduções de Adventures no Foundry VTT v14; valida baselines, impede merges ambíguos e sincroniza Outcomes narrativos do Ember.",
+  "version": "0.2.5",
   "type": "module",
   "authors": [
     {
@@ -11,7 +11,7 @@
   ],
   "compatibility": {
     "minimum": "14",
-    "verified": "14.368"
+    "verified": "14.369"
   },
   "esmodules": [
     "scripts/main.js"
