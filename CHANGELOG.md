@@ -1,3 +1,15 @@
+## 0.2.5
+
+- Atualiza a compatibilidade declarada para Foundry VTT 14.369 (D&D5e 6.x).
+- Protege `system.development.secrets` do Ember e não tenta traduzir conteúdo técnico de `hooks`.
+- Valida ID, compêndio e sistema nas baselines disponíveis, mantendo suporte às baselines antigas identificadas.
+- Bloqueia importações quando Outcomes/arrays traduzíveis perderam IDs e a Adventure alterou a ordem ou quantidade: melhor cancelar do que aplicar traduções ao evento errado.
+- Recupera Outcomes sem IDs somente quando a sequência original de IDs da baseline é idêntica à nova Adventure.
+- Evita mapear Journals duplicados de Adventures diferentes para o mesmo Outcome.
+- Aguarda a inicialização tardia do runtime narrativo do Ember, com tentativas limitadas.
+- Adiciona testes automatizados para merge, validação de baselines e reordenação de Outcomes, e pipeline de release versionada.
+- **Importante:** a compatibilidade com o código interno protegido do Ember ainda deve ser validada em uma cópia de mundo; não substitui snapshot/backup do Foundry.
+
 ## 0.2.4
 
 - Sincroniza automaticamente os Outcomes narrativos do Ember com os Journals do mundo após o carregamento.
