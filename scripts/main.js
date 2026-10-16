@@ -458,6 +458,10 @@ Hooks.on("preImportAdventure", (adventure, options, toCreate, toUpdate) => {
     if (game.settings.get(MODULE_ID, "autoRestore") && bypassContext.baseline) {
       const result = applyTranslationMerge(adventure, toUpdate, bypassContext.baseline);
       bypassContext.mergeResult = result;
+      if (result.unsafeArrayMappings > 0) {
+        ui.notifications.error(`${MODULE_TITLE}: a importação foi bloqueada: arrays traduzidos sem IDs estáveis.`, { permanent: true });
+        return false;
+      }
       console.log(`${MODULE_TITLE} | Merge aplicado antes da importação`, result);
     }
     return true;
@@ -506,6 +510,14 @@ async function runProtectionFlow(adventure, options, toCreate, toUpdate) {
   const preview = baseline
     ? previewTranslationMerge(toUpdate, baseline)
     : emptyMergeStats();
+
+  if (preview.unsafeArrayMappings > 0) {
+    ui.notifications.error(
+      `${MODULE_TITLE}: ${preview.unsafeArrayMappings} entrada(s) sem ID mudaram de posição ou quantidade. Importe somente após corrigir os IDs ou preparar outra baseline segura.`,
+      { permanent: true }
+    );
+    return;
+  }
 
   const action = await foundry.applications.api.DialogV2.wait({
     window: { title: `🛡️ ${MODULE_TITLE}` },
@@ -846,7 +858,7 @@ function getBaselineArrayIds(strings, arrayPath) {
   return ids.length ? ids : null;
 }
 
-function indexStringLeaves(root, referenceRoot = null, baselineStrings = null) {
+function indexStringLeaves(root, referenceRoot = null, baselineStrings = null, onAmbiguousArray = null) {
   const result = new Map();
 
   const getEntryId = entry => entry && typeof entry === "object"
@@ -884,6 +896,9 @@ function indexStringLeaves(root, referenceRoot = null, baselineStrings = null) {
 
       value.forEach((entry, index) => {
         const ownId = getEntryId(entry);
+        if (!ownId && referenceIds?.[index] && !safePositionalIds) {
+          onAmbiguousArray?.(tokens, index);
+        }
         // Known IDs must never be reassigned to unrelated source entries.
         const referenceEntry = ownId
           ? referenceById?.get(ownId) ?? null
@@ -952,7 +967,10 @@ function runTranslationMerge(toUpdate = {}, baseline, mutate) {
 
       stats.documentsCompared += 1;
       const localObject = current.toObject();
-      const localStrings = indexStringLeaves(localObject, incoming, oldDoc.strings);
+      const localStrings = indexStringLeaves(
+        localObject, incoming, oldDoc.strings,
+        () => { stats.unsafeArrayMappings += 1; }
+      );
       const newStrings = indexStringLeaves(incoming);
 
       for (const [path, oldValue] of Object.entries(oldDoc.strings ?? {})) {
@@ -1162,6 +1180,7 @@ function emptyMergeStats() {
     documentsWithoutBaseline: 0,
     localDifferences: 0,
     ignoredTechnicalDifferences: 0,
+    unsafeArrayMappings: 0,
     safePreservedFields: 0,
     sourceChangedFields: 0,
     htmlFieldsMerged: 0,
